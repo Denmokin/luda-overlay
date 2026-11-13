@@ -2,17 +2,19 @@
 
 A small add-on that runs on top of [TizenTube](https://github.com/reisxd/TizenTube) on Android TV. It adds a few household features without copying or changing TizenTube itself, so TizenTube's own features keep updating exactly as before.
 
-> **Status: early.** The loader works. The features below are being built and are marked with what is true today.
+> **Status: early.** It runs on one TV so far. The table says what is true today.
 
 ## Features
 
 | Feature | What it does | Status |
 |---|---|---|
-| Language that sticks | Makes the app's own Language setting take effect | Working, tested on one TV |
-| A language for each account | Each signed-in account keeps its own interface language | Written, not yet tested with signed-in accounts |
-| Settings for each account | Each account keeps its own TizenTube settings | Planned |
-| Silent previews | Previews play while you browse, with the sound off | Written, not yet confirmed on a TV |
-| Luda menu | One extra entry in Settings for the options above | Planned |
+| Language that sticks | Makes the app's own Language setting take effect | Working |
+| A language for each account | Each account, and guest mode, keeps its own interface language | Working |
+| Settings for each account | Each account keeps its own TizenTube settings | Working |
+| Silent previews | Previews play while you browse, with the sound off; opening a video restores it | Working |
+| Luda menu | One extra entry in Settings to switch the options above on and off | Planned |
+
+"Working" means tested on one Android TV with TizenTube Cobalt 2.0.3, one signed-in account and guest mode.
 
 ## How it works
 

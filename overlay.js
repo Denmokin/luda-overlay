@@ -8,7 +8,7 @@
   if (window.__ludaOverlay) return;
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
 
-  var luda = window.__ludaOverlay = { version: '0.2.0' };
+  var luda = window.__ludaOverlay = { version: '0.4.0' };
   var STORE = 'luda-overlay::';
 
   function read(key, fallback) {
@@ -28,7 +28,7 @@
     return window.ytcfg && ytcfg.get ? ytcfg.get(name) : undefined;
   }
 
-  var DEFAULTS = { silentPreviews: true, languagePerAccount: true };
+  var DEFAULTS = { silentPreviews: true, languagePerAccount: true, settingsPerAccount: true };
   var settings = read('settings', {});
   luda.setting = function (name, value) {
     if (arguments.length > 1) {
@@ -38,11 +38,31 @@
     return name in settings ? settings[name] : DEFAULTS[name];
   };
 
-  /** The signed-in account this page is showing, or 'guest'. */
+  /**
+   * The account this page is showing: its Google account id, or 'guest'.
+   * The TV page keeps the active identity in its own storage; only the id is read from it.
+   */
   function account() {
-    return config('LOGGED_IN') ? String(config('DATASYNC_ID') || 'signed-in') : 'guest';
+    try {
+      var identity = JSON.parse(localStorage.getItem('yt.leanback.default::last-identity-used')).data;
+      return String(identity.effectiveObfuscatedGaiaId || identity.ownerObfuscatedGaiaId || 'guest');
+    } catch (e) {
+      return 'guest';
+    }
   }
   luda.account = account;
+
+  var accountListeners = [];
+  var shownAccount = account();
+  setInterval(function () {
+    var now = account();
+    if (now === shownAccount) return;
+    var before = shownAccount;
+    shownAccount = now;
+    accountListeners.forEach(function (listener) {
+      try { listener(now, before); } catch (e) { /* one feature must not stop the others */ }
+    });
+  }, 1500);
 
   // ---------------------------------------------------------------------------------------------
   // Language
@@ -61,6 +81,7 @@
       .map(function (cookie) { return cookie.slice(5); });
   }
 
+  /** Puts [language] into the site-wide cookie; with no language the page follows the TV's own. */
   function writeLanguage(language) {
     var names = [];
     var fields = {};
@@ -74,8 +95,10 @@
         fields[name] = pair.slice(split + 1);
       });
     });
-    names.push('hl');
-    fields.hl = language;
+    if (language) {
+      names.push('hl');
+      fields.hl = language;
+    }
     var value = names.map(function (name) { return name + '=' + fields[name]; }).join('&');
     var expires = new Date(Date.now() + 10 * 365 * 864e5).toUTCString();
     cookies.set.call(document, 'PREF=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/'); // the page-only copy
@@ -90,12 +113,22 @@
     var languages = read('languages', {});
     languages[account()] = language;
     write('languages', languages);
+    write('language-owner', account());
   }
 
   /** Called when someone picks a language in the app's settings. */
   function chooseLanguage(language) {
     rememberLanguage(language);
     writeLanguage(language);
+  }
+
+  function cookieLanguage() {
+    var found = null;
+    prefCookies().forEach(function (value) {
+      var match = /(?:^|&)hl=([^&]*)/.exec(value);
+      if (match) found = match[1];
+    });
+    return found;
   }
 
   // TizenTube writes its page-only cookie as `PREF=hl=<language>`; turn that write into a real choice
@@ -121,18 +154,33 @@
     return read('languages', {})[account()] || null;
   }
 
+  /** True when the page should reload for [target]; only once per target, so a refused language can't loop. */
+  function reloadOnceFor(target) {
+    if (sessionStorage.getItem(STORE + 'language-reload') === target) return false;
+    sessionStorage.setItem(STORE + 'language-reload', target);
+    return true;
+  }
+
+  /** Makes the cookie match this account's language. Returns true when the page must reload to show it. */
   function applyLanguage() {
     var wanted = wantedLanguage();
-    if (!wanted) return;
-    if (sameLanguage(wanted, config('HL'))) {
-      sessionStorage.removeItem(STORE + 'language-reload');
-      return;
+    if (wanted) {
+      write('language-owner', account());
+      if (sameLanguage(wanted, config('HL'))) {
+        sessionStorage.removeItem(STORE + 'language-reload');
+        return false;
+      }
+      writeLanguage(wanted);
+      return reloadOnceFor(wanted);
     }
-    writeLanguage(wanted);
-    // one reload per wanted language, so a language the servers refuse can't loop
-    if (sessionStorage.getItem(STORE + 'language-reload') === wanted) return;
-    sessionStorage.setItem(STORE + 'language-reload', wanted);
-    location.reload();
+    // This account never chose a language: don't leave it with another account's choice
+    var owner = read('language-owner', null);
+    if (luda.setting('languagePerAccount') && owner && owner !== account() && cookieLanguage()) {
+      write('language-owner', null);
+      writeLanguage(null);
+      return reloadOnceFor('tv-default:' + account());
+    }
+    return false;
   }
 
   luda.language = { choose: chooseLanguage, wanted: wantedLanguage, apply: applyLanguage };
@@ -170,7 +218,51 @@
   luda.previews = { refresh: quietAll };
 
   // ---------------------------------------------------------------------------------------------
+  // TizenTube settings for each account
+  //
+  // TizenTube keeps one set of settings for the whole TV. Here every account gets its own copy:
+  // when the account changes, the live set is put away under the account that used it and the
+  // new account's set is brought in. A few settings describe the TV, not a person, and are shared.
+  // ---------------------------------------------------------------------------------------------
 
-  applyLanguage();
+  var TIZENTUBE = 'ytaf-configuration';
+  var SHARED = ['enableWhoIsWatchingMenu', 'permanentlyEnableWhoIsWatchingMenu', 'enableWhosWatchingMenuOnAppExit',
+    'dontCheckUpdateUntil', 'lastAnnouncementCheck', 'showWelcomeToast'];
+
+  /** Brings in this account's TizenTube settings. Returns true when the page must reload to use them. */
+  function applySettings() {
+    if (!luda.setting('settingsPerAccount')) return false;
+    var live = localStorage.getItem(TIZENTUBE);
+    if (live == null) return false; // TizenTube hasn't saved anything yet
+    var owner = read('settings-owner', null);
+    var now = account();
+    if (owner === now) return false;
+    write('settings-owner', now);
+    if (!owner) return false; // first run: the live settings belong to whoever is here
+    localStorage.setItem(STORE + 'tizentube::' + owner, live);
+    var mine = localStorage.getItem(STORE + 'tizentube::' + now);
+    if (mine == null) return false; // a new account starts from the settings it found
+    try {
+      var current = JSON.parse(live);
+      var next = JSON.parse(mine);
+      SHARED.forEach(function (name) { if (name in current) next[name] = current[name]; });
+      mine = JSON.stringify(next);
+    } catch (e) { /* keep the stored copy as it is */ }
+    if (mine === live) return false;
+    localStorage.setItem(TIZENTUBE, mine);
+    return true;
+  }
+  luda.settings = { apply: applySettings };
+
+  // ---------------------------------------------------------------------------------------------
+
+  function applyAccount() {
+    var settingsChanged = applySettings();
+    var languageChanged = applyLanguage();
+    if (settingsChanged || languageChanged) location.reload();
+  }
+
+  accountListeners.push(applyAccount);
+  applyAccount();
   quietAll();
 })();
