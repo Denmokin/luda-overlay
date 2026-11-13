@@ -8,10 +8,10 @@ A small add-on that runs on top of [TizenTube](https://github.com/reisxd/TizenTu
 
 | Feature | What it does | Status |
 |---|---|---|
-| Language that sticks | Makes the app's own Language setting take effect | In progress |
-| A language for each account | Each signed-in account keeps its own interface language | Planned |
+| Language that sticks | Makes the app's own Language setting take effect | Working, tested on one TV |
+| A language for each account | Each signed-in account keeps its own interface language | Written, not yet tested with signed-in accounts |
 | Settings for each account | Each account keeps its own TizenTube settings | Planned |
-| Silent previews | Previews play while you browse, with the sound off | Planned |
+| Silent previews | Previews play while you browse, with the sound off | Written, not yet confirmed on a TV |
 | Luda menu | One extra entry in Settings for the options above | Planned |
 
 ## How it works
