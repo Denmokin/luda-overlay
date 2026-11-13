@@ -8,7 +8,7 @@
   if (window.__ludaOverlay) return;
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
 
-  var luda = window.__ludaOverlay = { version: '0.5.0' };
+  var luda = window.__ludaOverlay = { version: '0.6.0' };
   var STORE = 'luda-overlay::';
 
   function read(key, fallback) {
@@ -186,8 +186,14 @@
   luda.language = { choose: chooseLanguage, wanted: wantedLanguage, apply: applyLanguage };
 
   // ---------------------------------------------------------------------------------------------
-  // Silent previews: videos that play while browsing stay muted; the watch page is left alone.
+  // Silent previews: videos that play while browsing are turned down until they can't be heard;
+  // the watch page is left alone.
+  //
+  // They are turned down, not muted: on some TVs a fully muted video keeps "playing" while its
+  // picture stands still, because the TV's video hardware follows the audio it is given.
   // ---------------------------------------------------------------------------------------------
+
+  var QUIET = 0.001; // 60 dB down
 
   function watching() {
     return /^#\/watch/.test(location.hash);
@@ -195,13 +201,19 @@
 
   function quiet(video) {
     if (luda.setting('silentPreviews') && !watching()) {
-      if (!video.muted) {
-        video.muted = true;
-        video.__ludaMuted = true;
+      if (video.muted && video.__ludaMuted) {
+        // left over from an earlier version of this add-on
+        video.__ludaMuted = false;
+        video.muted = false;
       }
-    } else if (video.__ludaMuted) {
-      video.__ludaMuted = false;
-      video.muted = false;
+      if (video.volume > QUIET) {
+        video.__ludaVolume = video.volume;
+        video.volume = QUIET;
+      }
+    } else if (video.__ludaVolume != null || video.volume === QUIET) {
+      var before = video.__ludaVolume != null ? video.__ludaVolume : 1;
+      video.__ludaVolume = null;
+      video.volume = before;
     }
   }
 
@@ -268,7 +280,7 @@
       settingsPerAccount: 'TizenTube settings for each account',
       settingsPerAccountHint: 'Each account keeps its own TizenTube settings',
       silentPreviews: 'Previews without sound',
-      silentPreviewsHint: 'Videos that play while you browse stay muted'
+      silentPreviewsHint: 'Videos that play while you browse stay silent'
     },
     ru: {
       menu: 'Настройки Luda',

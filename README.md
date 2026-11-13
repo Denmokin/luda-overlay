@@ -11,7 +11,7 @@ A small add-on that runs on top of [TizenTube](https://github.com/reisxd/TizenTu
 | Language that sticks | Makes the app's own Language setting take effect | Working |
 | A language for each account | Each account, and guest mode, keeps its own interface language | Working |
 | Settings for each account | Each account keeps its own TizenTube settings | Working |
-| Silent previews | Previews play while you browse, with the sound off; opening a video restores it | Working |
+| Silent previews | Previews play while you browse, turned down until they can't be heard; opening a video restores the sound | Working |
 | Luda menu | One extra entry in Settings to switch the options above on and off | Working |
 
 "Working" means tested on one Android TV with TizenTube Cobalt 2.0.3, one signed-in account and guest mode.
