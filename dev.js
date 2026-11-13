@@ -63,6 +63,6 @@
         .then(function (command) { if (command) run(command); }).catch(function () {});
     }, 1500);
   }).catch(function () {
-    add(ADDON);
+    add(ADDON + '?v=' + Date.now());
   });
 })();

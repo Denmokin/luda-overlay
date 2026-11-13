@@ -26,5 +26,6 @@
   }
 
   add(TIZENTUBE + Date.now());
-  if (window.top === window) add(ADDON); // the add-on only belongs in the main page
+  // the add-on only belongs in the main page; the time stops the TV from reusing an old saved copy
+  if (window.top === window) add(ADDON + '?v=' + Date.now());
 })();
