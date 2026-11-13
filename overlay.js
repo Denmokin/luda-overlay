@@ -8,7 +8,7 @@
   if (window.__ludaOverlay) return;
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
 
-  var luda = window.__ludaOverlay = { version: '0.7.0' };
+  var luda = window.__ludaOverlay = { version: '0.8.0' };
   var STORE = 'luda-overlay::';
 
   function read(key, fallback) {
@@ -424,6 +424,8 @@
       settingsPerAccountHint: 'Each account keeps its own TizenTube settings',
       silentPreviews: 'Previews without sound',
       silentPreviewsHint: 'Videos that play while you browse stay silent',
+      hideShorts: 'Hide Shorts',
+      hideShortsHint: 'Shorts are left out of lists; the app reloads to apply it',
       hideMixes: 'Hide mixes',
       hideMixesHint: 'Mix playlists are left out of lists opened from now on',
       hideUpcoming: 'Hide upcoming streams',
@@ -444,6 +446,8 @@
       settingsPerAccountHint: 'У каждого аккаунта свои настройки TizenTube',
       silentPreviews: 'Тизеры без звука',
       silentPreviewsHint: 'Видео, которые играют при просмотре ленты, остаются без звука',
+      hideShorts: 'Скрывать Shorts',
+      hideShortsHint: 'Shorts не показываются в списках; приложение перезагрузится',
       hideMixes: 'Скрывать миксы',
       hideMixesHint: 'Плейлисты-миксы не показываются в новых списках',
       hideUpcoming: 'Скрывать запланированные трансляции',
@@ -481,7 +485,28 @@
     });
   }
 
-  var OPTIONS = ['languagePerAccount', 'settingsPerAccount', 'silentPreviews', 'speedPerChannel', 'hideMixes', 'hideUpcoming'];
+  var OPTIONS = ['languagePerAccount', 'settingsPerAccount', 'silentPreviews', 'speedPerChannel', 'hideShorts', 'hideMixes', 'hideUpcoming'];
+
+  // "Hide Shorts" is TizenTube's own Shorts switch, so both menus always agree. TizenTube reads its
+  // settings once at start, so the page reloads to use the change.
+  function tizenTubeConfig() {
+    try { return JSON.parse(localStorage.getItem(TIZENTUBE)) || {}; } catch (e) { return {}; }
+  }
+
+  function checked(name) {
+    return name === 'hideShorts' ? tizenTubeConfig().enableShorts === false : luda.setting(name);
+  }
+
+  function toggle(name) {
+    if (name !== 'hideShorts') {
+      luda.setting(name, !luda.setting(name));
+      return false;
+    }
+    var current = tizenTubeConfig();
+    current.enableShorts = current.enableShorts === false;
+    localStorage.setItem(TIZENTUBE, JSON.stringify(current));
+    return true;
+  }
   var SLEEP_ROW = OPTIONS.length; // the sleep timer comes after the switches
 
   function showMenu(selected, update) {
@@ -500,7 +525,7 @@
     }
     var items = OPTIONS.map(function (name) {
       return row(text(name), text(name + 'Hint'), 'LUDA_TOGGLE', [name],
-        luda.setting(name) ? 'CHECK_BOX' : 'CHECK_BOX_OUTLINE_BLANK');
+        checked(name) ? 'CHECK_BOX' : 'CHECK_BOX_OUTLINE_BLANK');
     });
     items.push(row(text('sleepTimer'), sleepLabel(), 'LUDA_SLEEP', []));
     var back = { signalAction: { signal: 'POPUP_BACK' } };
@@ -546,9 +571,10 @@
     } else if (action.action === 'LUDA_TOGGLE') {
       var name = action.parameters && action.parameters[0];
       if (OPTIONS.indexOf(name) < 0) return;
-      luda.setting(name, !luda.setting(name));
+      var reload = toggle(name);
       if (name === 'silentPreviews') quietAll();
       showMenu(OPTIONS.indexOf(name), true);
+      if (reload) setTimeout(function () { location.reload(); }, 700);
     } else if (action.action === 'LUDA_SLEEP') {
       setSleep((sleep.step + 1) % SLEEP_STEPS.length);
       showMenu(SLEEP_ROW, true);
