@@ -12,9 +12,11 @@ A small add-on that runs on top of [TizenTube](https://github.com/reisxd/TizenTu
 | A language for each account | Each account, and guest mode, keeps its own interface language | Working |
 | Settings for each account | Each account keeps its own TizenTube settings | Working |
 | Silent previews | Previews play while you browse, with the sound off; opening a video restores it | Working |
-| Luda menu | One extra entry in Settings to switch the options above on and off | Planned |
+| Luda menu | One extra entry in Settings to switch the options above on and off | Working |
 
 "Working" means tested on one Android TV with TizenTube Cobalt 2.0.3, one signed-in account and guest mode.
+
+<img src="docs/luda-settings.png" alt="The Luda settings panel with its three options switched on" width="420">
 
 ## How it works
 

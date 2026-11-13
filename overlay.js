@@ -8,7 +8,7 @@
   if (window.__ludaOverlay) return;
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
 
-  var luda = window.__ludaOverlay = { version: '0.4.0' };
+  var luda = window.__ludaOverlay = { version: '0.5.0' };
   var STORE = 'luda-overlay::';
 
   function read(key, fallback) {
@@ -253,6 +253,187 @@
     return true;
   }
   luda.settings = { apply: applySettings };
+
+  // ---------------------------------------------------------------------------------------------
+  // Luda menu: one entry in the app's Settings that opens a panel with this add-on's options.
+  // It is built from the same panel and list pieces the app uses for its own menus.
+  // ---------------------------------------------------------------------------------------------
+
+  var TEXT = {
+    en: {
+      menu: 'Luda settings',
+      summary: 'Options added by the Luda overlay',
+      languagePerAccount: 'A language for each account',
+      languagePerAccountHint: 'Each account keeps the language chosen for it in Settings',
+      settingsPerAccount: 'TizenTube settings for each account',
+      settingsPerAccountHint: 'Each account keeps its own TizenTube settings',
+      silentPreviews: 'Previews without sound',
+      silentPreviewsHint: 'Videos that play while you browse stay muted'
+    },
+    ru: {
+      menu: 'Настройки Luda',
+      summary: 'Возможности, которые добавляет Luda',
+      languagePerAccount: 'Свой язык для каждого аккаунта',
+      languagePerAccountHint: 'Каждый аккаунт сохраняет язык, выбранный для него в настройках',
+      settingsPerAccount: 'Свои настройки TizenTube для каждого аккаунта',
+      settingsPerAccountHint: 'У каждого аккаунта свои настройки TizenTube',
+      silentPreviews: 'Тизеры без звука',
+      silentPreviewsHint: 'Видео, которые играют при просмотре ленты, остаются без звука'
+    }
+  };
+
+  function text(key) {
+    var language = String(config('HL') || 'en').slice(0, 2).toLowerCase();
+    return (TEXT[language] || TEXT.en)[key] || TEXT.en[key];
+  }
+
+  /** Hands a command to the app, the way its own menus do. */
+  function command(cmd) {
+    for (var key in window._yttv) {
+      var holder = window._yttv[key];
+      if (holder && holder.instance && typeof holder.instance.resolveCommand === 'function') {
+        return holder.instance.resolveCommand(cmd);
+      }
+    }
+  }
+
+  var OPTIONS = ['languagePerAccount', 'settingsPerAccount', 'silentPreviews'];
+
+  function showMenu(selected, update) {
+    var items = OPTIONS.map(function (name) {
+      return {
+        compactLinkRenderer: {
+          title: { simpleText: text(name) },
+          subtitle: { simpleText: text(name + 'Hint') },
+          secondaryIcon: { iconType: luda.setting(name) ? 'CHECK_BOX' : 'CHECK_BOX_OUTLINE_BLANK' },
+          serviceEndpoint: {
+            commandExecutorCommand: { commands: [{ customAction: { action: 'LUDA_TOGGLE', parameters: [name] } }] }
+          }
+        }
+      };
+    });
+    var back = { signalAction: { signal: 'POPUP_BACK' } };
+    var popup = {
+      openPopupAction: {
+        popupType: 'MODAL',
+        uniqueId: 'luda-settings',
+        popup: {
+          overlaySectionRenderer: {
+            overlay: {
+              overlayTwoPanelRenderer: {
+                actionPanel: {
+                  overlayPanelRenderer: {
+                    header: {
+                      overlayPanelHeaderRenderer: {
+                        title: { simpleText: text('menu') },
+                        subtitle: { simpleText: text('summary') }
+                      }
+                    },
+                    content: { overlayPanelItemListRenderer: { items: items, selectedIndex: selected || 0 } }
+                  }
+                },
+                backButton: {
+                  buttonRenderer: { accessibilityData: { accessibilityData: { label: 'Back' } }, command: back }
+                }
+              }
+            },
+            dismissalCommand: back
+          }
+        }
+      }
+    };
+    if (update) {
+      popup.openPopupAction.shouldMatchUniqueId = true;
+      popup.openPopupAction.updateAction = true;
+    }
+    command(popup);
+  }
+
+  function runAction(action) {
+    if (action.action === 'LUDA_SETTINGS_SHOW') {
+      showMenu(0, false);
+    } else if (action.action === 'LUDA_TOGGLE') {
+      var name = action.parameters && action.parameters[0];
+      if (OPTIONS.indexOf(name) < 0) return;
+      luda.setting(name, !luda.setting(name));
+      if (name === 'silentPreviews') quietAll();
+      showMenu(OPTIONS.indexOf(name), true);
+    }
+  }
+
+  /** The Luda actions inside [cmd], or null when it isn't ours. */
+  function ludaActions(cmd) {
+    function ours(c) { return c && c.customAction && /^LUDA_/.test(String(c.customAction.action)); }
+    if (!cmd) return null;
+    if (ours(cmd)) return [cmd.customAction];
+    var list = cmd.commandExecutorCommand && cmd.commandExecutorCommand.commands;
+    if (Array.isArray(list) && list.some(ours)) {
+      return list.filter(ours).map(function (c) { return c.customAction; });
+    }
+    return null;
+  }
+
+  // Luda's own actions are picked out before the app or TizenTube see them. TizenTube wraps the same
+  // function, possibly later than this runs, so the check is repeated to stay in front.
+  function hookCommands() {
+    for (var key in window._yttv) {
+      var holder = window._yttv[key];
+      var instance = holder && holder.instance;
+      if (!instance || typeof instance.resolveCommand !== 'function' || instance.resolveCommand.__luda) continue;
+      (function (target, previous) {
+        var wrapped = function (cmd, extra) {
+          var actions = ludaActions(cmd);
+          if (actions) {
+            actions.forEach(runAction);
+            return true;
+          }
+          return previous.call(this, cmd, extra);
+        };
+        wrapped.__luda = true;
+        target.resolveCommand = wrapped;
+      })(instance, instance.resolveCommand);
+    }
+  }
+  setInterval(hookCommands, 2000);
+  hookCommands();
+
+  function addSettingsEntry(page) {
+    if (!page || !page.title || !page.title.runs || !Array.isArray(page.items)) return;
+    function category(item) { return item && item.settingCategoryCollectionRenderer; }
+    if (!page.items.some(category)) return;
+    if (page.items.some(function (item) { return category(item) && category(item).categoryId === 'luda_category'; })) return;
+    var label = { runs: [{ text: text('menu') }] };
+    var entry = {
+      settingCategoryCollectionRenderer: {
+        categoryId: 'luda_category',
+        focused: false,
+        trackingParams: 'null',
+        items: [{
+          settingActionRenderer: {
+            itemId: 'luda_open_action',
+            title: label,
+            actionLabel: label,
+            summary: { runs: [{ text: text('summary') }] },
+            trackingParams: 'null',
+            serviceEndpoint: { customAction: { action: 'LUDA_SETTINGS_SHOW', parameters: [] } },
+            thumbnail: { thumbnails: [{ url: 'https://www.gstatic.com/ytlr/img/parent_code.png' }] }
+          }
+        }]
+      }
+    };
+    var first = category(page.items[0]);
+    page.items.splice(first && first.categoryId === 'tizentube_category' ? 1 : 0, 0, entry);
+  }
+
+  // The Settings page arrives as JSON; the entry is added as it is read
+  var parse = JSON.parse;
+  JSON.parse = function () {
+    var result = parse.apply(this, arguments);
+    try { addSettingsEntry(result); } catch (e) { /* never break the app's own parsing */ }
+    return result;
+  };
+
+  luda.menu = { show: function () { showMenu(0, false); } };
 
   // ---------------------------------------------------------------------------------------------
 
