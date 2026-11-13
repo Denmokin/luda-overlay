@@ -24,29 +24,33 @@ A small add-on that runs on top of [TizenTube](https://github.com/reisxd/TizenTu
 TizenTube app (official release, wrapped)
         │  loads one script address
         ▼
-   loader.js  ──►  TizenTube's own script, from its usual address, always the latest
+   loader.js @<commit>  ──►  TizenTube's own script, from its usual address, always the latest
         │
-        └──────►  overlay.js, the add-on in this repository
+        └──────────────────►  overlay.js @<same commit>, the add-on
 ```
 
-TizenTube's app loads its script from a single address. A wrapped copy of the app has that one address changed to `loader.js` from this repository; nothing else in the app is touched. The loader then does two things, in order:
+TizenTube's app loads its script from a single address. A wrapped copy of the app has that one address changed to `loader.js` from this repository, pinned to a commit; nothing else in the app is touched. The loader then does two things, in order:
 
 1. It loads TizenTube's script from where TizenTube publishes it.
-2. It loads `overlay.js`, which adds the features in the table.
+2. It loads `overlay.js` from the same commit as itself.
 
 Because TizenTube's script is never copied here, there is nothing to keep in step with it.
+
+### Why commits and not `@main`
+
+The app only runs scripts from jsDelivr. jsDelivr serves a branch address such as `@main` from caches that can stay hours behind, and some of its servers kept serving the very first version of this add-on long after newer ones were published. A commit address never changes, so a wrapped app always gets exactly the files it was tested with.
 
 ## Updates
 
 | What | How it updates |
 |---|---|
 | TizenTube's features | By themselves at every start, as in the official app |
-| This add-on | By itself, a few hours after a change lands here |
-| The app itself | Each new TizenTube release has to be wrapped again with `tools/patch-apk.sh` |
+| This add-on | With a new wrapped app: wrap again with the new commit, then install it over the old wrapped app (no sign-out) |
+| The app itself | Each new TizenTube release has to be wrapped again |
 
 A wrapped app is signed with your own key, so:
 
-- it can replace the official app only after uninstalling it, which signs every account out once;
+- the first install replaces the official app only after uninstalling it, which signs every account out once; later wrapped versions install over it and keep everything;
 - TizenTube's built-in app updater can no longer install new versions over it.
 
 ## Wrapping a TizenTube release
@@ -54,12 +58,13 @@ A wrapped app is signed with your own key, so:
 You need `unzip`, `zip`, `python3`, a JDK, and `zipalign` and `apksigner` from the Android build-tools.
 
 ```bash
-tools/patch-apk.sh cobalt-arm.apk tizentube-luda-arm.apk
-adb uninstall io.gh.reisxd.tizentube.cobalt
-adb install tizentube-luda-arm.apk
+LUDA_LOADER_URL=https://cdn.jsdelivr.net/gh/Denmokin/luda-overlay@<commit>/loader.js \
+  tools/patch-apk.sh cobalt-arm.apk tizentube-luda-arm.apk
+adb uninstall io.gh.reisxd.tizentube.cobalt     # only when replacing the official app
+adb install -r tizentube-luda-arm.apk
 ```
 
-The script stops without changing anything if the address is not found exactly once, which is what will happen if a future TizenTube release moves it.
+The address may be at most 69 characters, the length of the one it replaces; a shorter one is padded with `#`. The script stops without changing anything if the original address is not found exactly once, which is what will happen if a future TizenTube release moves it.
 
 ## Files
 
