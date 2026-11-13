@@ -11,13 +11,18 @@ set -euo pipefail
 
 in="${1:?official apk}"; out="${2:?output apk}"
 needle='https://cdn.jsdelivr.net/npm/@foxreis/tizentube/dist/userScript.js?v='
-# Same length as the original address, so nothing else in the file moves.
-loader="${LUDA_LOADER_URL:-https://cdn.jsdelivr.net/gh/Denmokin/luda-overlay@main/loader.js?a&v=}"
+# The new address takes exactly the original's space, so nothing else in the file moves.
+# Pin the loader to a commit: a branch address (@main) can be served stale by some of the file host's
+# servers for hours, while a commit address never changes. Shorter addresses are padded with '#',
+# which only lengthens the part after '#' that is never sent to the server.
+loader="${LUDA_LOADER_URL:?set LUDA_LOADER_URL, e.g. https://cdn.jsdelivr.net/gh/Denmokin/luda-overlay@<commit>/loader.js}"
 keystore="${LUDA_KEYSTORE:-$HOME/.config/.android/debug.keystore}"
 storepass="${LUDA_KEYSTORE_PASS:-android}"
 tools="${ANDROID_BUILD_TOOLS:-$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)}"
 
-[ "${#needle}" -eq "${#loader}" ] || { echo "loader address must be ${#needle} characters, got ${#loader}" >&2; exit 3; }
+[ "${#loader}" -le "${#needle}" ] || { echo "loader address must be at most ${#needle} characters, got ${#loader}" >&2; exit 3; }
+case "$loader" in *'#'*) ;; *) [ "${#loader}" -lt "${#needle}" ] && loader="$loader#" ;; esac
+while [ "${#loader}" -lt "${#needle}" ]; do loader="$loader#"; done
 
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 cp "$in" "$work/app.apk"

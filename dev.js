@@ -10,7 +10,12 @@
   window.__ludaLoader = true;
 
   var TIZENTUBE = 'https://cdn.jsdelivr.net/npm/@foxreis/tizentube/dist/userScript.js?v=';
-  var ADDON = 'https://cdn.jsdelivr.net/gh/Denmokin/luda-overlay@main/overlay.js';
+  // The add-on comes from the same commit as this file. A branch address (@main) can be served
+  // stale for hours by some of the file host's servers; a commit address never changes.
+  var REPO = 'https://cdn.jsdelivr.net/gh/Denmokin/luda-overlay@';
+  var self = (document.currentScript && document.currentScript.src) || '';
+  var pin = /luda-overlay@([0-9a-f]{7,40})\//.exec(self);
+  var ADDON = REPO + (pin ? pin[1] : 'main') + '/overlay.js';
   var DEV = 'http://127.0.0.1:8013/luda-overlay/';
 
   var policy = null;
@@ -63,6 +68,6 @@
         .then(function (command) { if (command) run(command); }).catch(function () {});
     }, 1500);
   }).catch(function () {
-    add(ADDON + '?v=' + Date.now());
+    add(pin ? ADDON : ADDON + '?v=' + Date.now());
   });
 })();
