@@ -8,7 +8,7 @@
   if (window.__ludaOverlay) return;
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
 
-  var luda = window.__ludaOverlay = { version: '0.6.0' };
+  var luda = window.__ludaOverlay = { version: '0.7.0' };
   var STORE = 'luda-overlay::';
 
   function read(key, fallback) {
@@ -28,7 +28,10 @@
     return window.ytcfg && ytcfg.get ? ytcfg.get(name) : undefined;
   }
 
-  var DEFAULTS = { silentPreviews: true, languagePerAccount: true, settingsPerAccount: true };
+  var DEFAULTS = {
+    silentPreviews: true, languagePerAccount: true, settingsPerAccount: true,
+    hideMixes: false, hideUpcoming: false, speedPerChannel: true
+  };
   var settings = read('settings', {});
   luda.setting = function (name, value) {
     if (arguments.length > 1) {
@@ -267,6 +270,146 @@
   luda.settings = { apply: applySettings };
 
   // ---------------------------------------------------------------------------------------------
+  // Feed filters: mixes and upcoming streams are left out of the lists the app receives.
+  // ---------------------------------------------------------------------------------------------
+
+  function hiddenTile(item) {
+    var tile = item && item.tileRenderer;
+    if (!tile) return false;
+    if (luda.setting('hideMixes') && tile.contentType === 'TILE_CONTENT_TYPE_PLAYLIST') {
+      var watch = tile.onSelectCommand && tile.onSelectCommand.watchEndpoint;
+      if (watch && /^RD/.test(String(watch.playlistId || ''))) return true; // a Mix
+    }
+    if (luda.setting('hideUpcoming')) {
+      var header = tile.header && tile.header.tileHeaderRenderer;
+      var overlays = (header && header.thumbnailOverlays) || [];
+      for (var i = 0; i < overlays.length; i++) {
+        var status = overlays[i].thumbnailOverlayTimeStatusRenderer;
+        if (status && status.style === 'UPCOMING') return true;
+      }
+    }
+    return false;
+  }
+
+  function filterFeed(value, depth) {
+    if (!value || typeof value !== 'object' || depth > 40) return;
+    if (Array.isArray(value)) {
+      for (var i = value.length - 1; i >= 0; i--) {
+        if (hiddenTile(value[i])) value.splice(i, 1);
+        else filterFeed(value[i], depth + 1);
+      }
+      return;
+    }
+    for (var key in value) {
+      if (value[key] && typeof value[key] === 'object') filterFeed(value[key], depth + 1);
+    }
+  }
+
+  function filterResponse(result) {
+    if (!luda.setting('hideMixes') && !luda.setting('hideUpcoming')) return;
+    if (!result || typeof result !== 'object') return;
+    if (result.contents || result.continuationContents || result.onResponseReceivedActions) filterFeed(result, 0);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Speed for each channel: a speed picked while watching is used again for that channel's videos.
+  // Speeds are kept per account. Changes in the first moments of a video are the app's own
+  // start-up settings, not a choice, so they are not remembered.
+  // ---------------------------------------------------------------------------------------------
+
+  function player() {
+    return document.querySelector('.html5-video-player');
+  }
+
+  function currentChannel() {
+    try {
+      var response = player().getPlayerResponse();
+      var details = response && response.videoDetails;
+      if (details && location.hash.indexOf(details.videoId) >= 0) return details.channelId || null;
+    } catch (e) { /* no player yet */ }
+    return null;
+  }
+
+  function channelSpeeds() {
+    var all = read('speeds', {});
+    return all[account()] || {};
+  }
+
+  function rememberSpeed(channel, rate) {
+    var all = read('speeds', {});
+    var mine = all[account()] || {};
+    if (rate === 1) delete mine[channel]; else mine[channel] = rate;
+    all[account()] = mine;
+    write('speeds', all);
+  }
+
+  var lastSet = { rate: 0, at: 0 };
+
+  function applySpeed(video) {
+    if (!luda.setting('speedPerChannel') || !watching()) return;
+    var channel = currentChannel();
+    var saved = channel && channelSpeeds()[channel];
+    if (!saved || video.playbackRate === saved) return;
+    lastSet = { rate: saved, at: Date.now() };
+    var p = player();
+    if (p && typeof p.setPlaybackRate === 'function') p.setPlaybackRate(saved);
+    if (video.playbackRate !== saved) video.playbackRate = saved;
+  }
+
+  var videoChanged = 0; // when a video last started loading or the page last changed
+  document.addEventListener('loadstart', function () { videoChanged = Date.now(); }, true);
+  window.addEventListener('hashchange', function () { videoChanged = Date.now(); });
+
+  document.addEventListener('playing', function (e) {
+    var video = e.target;
+    if (!video || video.tagName !== 'VIDEO') return;
+    // the player's own information about the video arrives a moment after it starts
+    [400, 1500, 3000].forEach(function (delay) { setTimeout(function () { applySpeed(video); }, delay); });
+  }, true);
+
+  document.addEventListener('ratechange', function (e) {
+    var video = e.target;
+    if (!video || video.tagName !== 'VIDEO' || !luda.setting('speedPerChannel') || !watching()) return;
+    // the player resets the speed whenever a video starts; only later changes are a viewer's choice
+    if (Date.now() - videoChanged < 4000 || video.currentTime < 3) return;
+    if (video.playbackRate === lastSet.rate && Date.now() - lastSet.at < 2000) return;
+    var channel = currentChannel();
+    if (channel) rememberSpeed(channel, video.playbackRate);
+  }, true);
+
+  // ---------------------------------------------------------------------------------------------
+  // Sleep timer: pauses playback after the chosen time. It lasts until the app is closed.
+  // ---------------------------------------------------------------------------------------------
+
+  var SLEEP_STEPS = [0, 15, 30, 60, 90];
+  var sleep = { step: 0, at: 0, timer: null };
+
+  function setSleep(step) {
+    clearTimeout(sleep.timer);
+    sleep.step = step;
+    var minutes = SLEEP_STEPS[step];
+    sleep.at = minutes ? Date.now() + minutes * 60000 : 0;
+    if (minutes) sleep.timer = setTimeout(sleepNow, minutes * 60000);
+  }
+
+  function sleepNow() {
+    sleep.step = 0;
+    sleep.at = 0;
+    var p = player();
+    if (p && typeof p.pauseVideo === 'function') p.pauseVideo();
+    Array.prototype.forEach.call(document.querySelectorAll('video'), function (video) { video.pause(); });
+    toast(text('sleepTimer'), text('sleepDone'));
+  }
+
+  function sleepLabel() {
+    if (!sleep.at) return text('sleepOff');
+    var left = Math.max(1, Math.round((sleep.at - Date.now()) / 60000));
+    return text('sleepLeft').replace('%d', left);
+  }
+
+  luda.sleep = { set: setSleep, now: sleepNow };
+
+  // ---------------------------------------------------------------------------------------------
   // Luda menu: one entry in the app's Settings that opens a panel with this add-on's options.
   // It is built from the same panel and list pieces the app uses for its own menus.
   // ---------------------------------------------------------------------------------------------
@@ -280,7 +423,17 @@
       settingsPerAccount: 'TizenTube settings for each account',
       settingsPerAccountHint: 'Each account keeps its own TizenTube settings',
       silentPreviews: 'Previews without sound',
-      silentPreviewsHint: 'Videos that play while you browse stay silent'
+      silentPreviewsHint: 'Videos that play while you browse stay silent',
+      hideMixes: 'Hide mixes',
+      hideMixesHint: 'Mix playlists are left out of lists opened from now on',
+      hideUpcoming: 'Hide upcoming streams',
+      hideUpcomingHint: 'Scheduled streams and premieres are left out of lists',
+      speedPerChannel: 'Remember speed for each channel',
+      speedPerChannelHint: 'A speed you pick is used again for that channel',
+      sleepTimer: 'Sleep timer',
+      sleepOff: 'Off',
+      sleepLeft: '%d min left',
+      sleepDone: 'Playback paused'
     },
     ru: {
       menu: 'Настройки Luda',
@@ -290,7 +443,17 @@
       settingsPerAccount: 'Свои настройки TizenTube для каждого аккаунта',
       settingsPerAccountHint: 'У каждого аккаунта свои настройки TizenTube',
       silentPreviews: 'Тизеры без звука',
-      silentPreviewsHint: 'Видео, которые играют при просмотре ленты, остаются без звука'
+      silentPreviewsHint: 'Видео, которые играют при просмотре ленты, остаются без звука',
+      hideMixes: 'Скрывать миксы',
+      hideMixesHint: 'Плейлисты-миксы не показываются в новых списках',
+      hideUpcoming: 'Скрывать запланированные трансляции',
+      hideUpcomingHint: 'Запланированные трансляции и премьеры не показываются в списках',
+      speedPerChannel: 'Запоминать скорость для каждого канала',
+      speedPerChannelHint: 'Выбранная скорость снова используется для этого канала',
+      sleepTimer: 'Таймер сна',
+      sleepOff: 'Выключен',
+      sleepLeft: 'Осталось %d мин',
+      sleepDone: 'Воспроизведение остановлено'
     }
   };
 
@@ -309,21 +472,37 @@
     }
   }
 
-  var OPTIONS = ['languagePerAccount', 'settingsPerAccount', 'silentPreviews'];
+  function toast(title, subtitle) {
+    command({
+      openPopupAction: {
+        popupType: 'TOAST',
+        popup: { overlayToastRenderer: { title: { simpleText: title }, subtitle: { simpleText: subtitle || '' } } }
+      }
+    });
+  }
+
+  var OPTIONS = ['languagePerAccount', 'settingsPerAccount', 'silentPreviews', 'speedPerChannel', 'hideMixes', 'hideUpcoming'];
+  var SLEEP_ROW = OPTIONS.length; // the sleep timer comes after the switches
 
   function showMenu(selected, update) {
-    var items = OPTIONS.map(function (name) {
-      return {
+    function row(title, subtitle, action, parameters, icon) {
+      var item = {
         compactLinkRenderer: {
-          title: { simpleText: text(name) },
-          subtitle: { simpleText: text(name + 'Hint') },
-          secondaryIcon: { iconType: luda.setting(name) ? 'CHECK_BOX' : 'CHECK_BOX_OUTLINE_BLANK' },
+          title: { simpleText: title },
+          subtitle: { simpleText: subtitle },
           serviceEndpoint: {
-            commandExecutorCommand: { commands: [{ customAction: { action: 'LUDA_TOGGLE', parameters: [name] } }] }
+            commandExecutorCommand: { commands: [{ customAction: { action: action, parameters: parameters } }] }
           }
         }
       };
+      if (icon) item.compactLinkRenderer.secondaryIcon = { iconType: icon };
+      return item;
+    }
+    var items = OPTIONS.map(function (name) {
+      return row(text(name), text(name + 'Hint'), 'LUDA_TOGGLE', [name],
+        luda.setting(name) ? 'CHECK_BOX' : 'CHECK_BOX_OUTLINE_BLANK');
     });
+    items.push(row(text('sleepTimer'), sleepLabel(), 'LUDA_SLEEP', []));
     var back = { signalAction: { signal: 'POPUP_BACK' } };
     var popup = {
       openPopupAction: {
@@ -370,6 +549,9 @@
       luda.setting(name, !luda.setting(name));
       if (name === 'silentPreviews') quietAll();
       showMenu(OPTIONS.indexOf(name), true);
+    } else if (action.action === 'LUDA_SLEEP') {
+      setSleep((sleep.step + 1) % SLEEP_STEPS.length);
+      showMenu(SLEEP_ROW, true);
     }
   }
 
@@ -442,6 +624,7 @@
   JSON.parse = function () {
     var result = parse.apply(this, arguments);
     try { addSettingsEntry(result); } catch (e) { /* never break the app's own parsing */ }
+    try { filterResponse(result); } catch (e) { /* the same */ }
     return result;
   };
 

@@ -1,6 +1,6 @@
 # Luda overlay
 
-A small add-on that runs on top of [TizenTube](https://github.com/reisxd/TizenTube) on Android TV. It adds a few household features without copying or changing TizenTube itself, so TizenTube's own features keep updating exactly as before.
+A small add-on that runs on top of [TizenTube](https://github.com/reisxd/TizenTube) on Android TV. It adds household features, some of them familiar from SmartTube, without copying or changing TizenTube itself, so TizenTube's own features keep updating exactly as before.
 
 > **Status: early.** It runs on one TV so far. The table says what is true today.
 
@@ -12,11 +12,15 @@ A small add-on that runs on top of [TizenTube](https://github.com/reisxd/TizenTu
 | A language for each account | Each account, and guest mode, keeps its own interface language | Working |
 | Settings for each account | Each account keeps its own TizenTube settings | Working |
 | Silent previews | Previews play while you browse, turned down until they can't be heard; opening a video restores the sound | Working |
+| Remember speed for each channel | A speed picked while watching is used again for that channel's videos, per account | Working |
+| Hide mixes | Mix playlists are left out of lists | Working |
+| Hide upcoming streams | Scheduled streams and premieres are left out of lists | Working on a test list; no scheduled stream was available to try |
+| Sleep timer | Pauses playback after 15, 30, 60 or 90 minutes | Working |
 | Luda menu | One extra entry in Settings to switch the options above on and off | Working |
 
 "Working" means tested on one Android TV with TizenTube Cobalt 2.0.3, one signed-in account and guest mode.
 
-<img src="docs/luda-settings.png" alt="The Luda settings panel with its three options switched on" width="420">
+<img src="docs/luda-settings.png" alt="The Luda settings panel with its options and the sleep timer" width="420">
 
 ## How it works
 
