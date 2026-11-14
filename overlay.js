@@ -8,7 +8,7 @@
   if (window.__ludaOverlay) return;
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
 
-  var luda = window.__ludaOverlay = { version: '0.8.0' };
+  var luda = window.__ludaOverlay = { version: '0.9.0' };
   var STORE = 'luda-overlay::';
 
   function read(key, fallback) {
@@ -24,13 +24,22 @@
     try { localStorage.setItem(STORE + key, JSON.stringify(value)); } catch (e) { /* storage full or blocked */ }
   }
 
+  /** A short diary kept on the TV while `luda-overlay::debug` is set; used to find faults. */
+  function trace(message) {
+    if (!read('debug', false)) return;
+    var lines = read('trace', []);
+    lines.push(new Date().toISOString().slice(11, 23) + ' ' + message);
+    write('trace', lines.slice(-150));
+  }
+  trace('start ' + location.hash);
+
   function config(name) {
     return window.ytcfg && ytcfg.get ? ytcfg.get(name) : undefined;
   }
 
   var DEFAULTS = {
     silentPreviews: true, languagePerAccount: true, settingsPerAccount: true,
-    hideMixes: false, hideUpcoming: false, speedPerChannel: true
+    hideMixes: false, hideUpcoming: false, speedPerChannel: true, previewDelay: 1000
   };
   var settings = read('settings', {});
   luda.setting = function (name, value) {
@@ -62,10 +71,11 @@
     if (now === shownAccount) return;
     var before = shownAccount;
     shownAccount = now;
+    trace('account ' + before + ' -> ' + now);
     accountListeners.forEach(function (listener) {
       try { listener(now, before); } catch (e) { /* one feature must not stop the others */ }
     });
-  }, 1500);
+  }, 5000);
 
   // ---------------------------------------------------------------------------------------------
   // Language
@@ -139,6 +149,7 @@
     configurable: true,
     get: function () { return cookies.get.call(document); },
     set: function (value) {
+      if (/^\s*PREF=/.test(String(value))) trace('cookie ' + String(value).slice(0, 120));
       var choice = /^\s*PREF=hl=([A-Za-z0-9_-]+)\s*(;|$)/.exec(String(value));
       if (choice && !/;\s*domain=/i.test(String(value))) chooseLanguage(choice[1]);
       else cookies.set.call(document, value);
@@ -147,12 +158,6 @@
 
   /** The language this account should see, if one was chosen. */
   function wantedLanguage() {
-    var leftover = prefCookies().filter(function (value) { return /^hl=[A-Za-z0-9_-]+$/.test(value); })[0];
-    if (leftover) {
-      // a choice made before this add-on was installed
-      rememberLanguage(leftover.slice(3));
-      return leftover.slice(3);
-    }
     if (!luda.setting('languagePerAccount')) return null;
     return read('languages', {})[account()] || null;
   }
@@ -273,7 +278,23 @@
   // Feed filters: mixes and upcoming streams are left out of the lists the app receives.
   // ---------------------------------------------------------------------------------------------
 
+  /** True while TizenTube's own Shorts switch is off; its value is read once per page, like TizenTube does. */
+  var shortsHidden = (function () {
+    try { return JSON.parse(localStorage.getItem('ytaf-configuration')).enableShorts === false; } catch (e) { return false; }
+  })();
+
+  /** The Shorts entry in the side menu, which TizenTube's switch leaves in place. */
+  function shortsEntry(item) {
+    var entry = item && item.guideEntryRenderer;
+    if (!entry) return false;
+    var icon = entry.icon && entry.icon.iconType;
+    var endpoint = entry.navigationEndpoint || {};
+    return Boolean(endpoint.reelWatchEndpoint) || /SHORTS/.test(String(icon || '')) ||
+      /^FEshorts/.test(String(endpoint.browseEndpoint && endpoint.browseEndpoint.browseId || ''));
+  }
+
   function hiddenTile(item) {
+    if (shortsHidden && shortsEntry(item)) return true;
     var tile = item && item.tileRenderer;
     if (!tile) return false;
     if (luda.setting('hideMixes') && tile.contentType === 'TILE_CONTENT_TYPE_PLAYLIST') {
@@ -291,24 +312,62 @@
     return false;
   }
 
+  // Parts of a response that never hold a list of tiles; skipping them is most of the speed
+  var NO_TILES = {
+    thumbnail: 1, thumbnails: 1, trackingParams: 1, accessibility: 1, accessibilityData: 1,
+    loggingDirectives: 1, responseContext: 1, frameworkUpdates: 1, menu: 1, title: 1,
+    metadata: 1, header: 1, onFocusCommand: 1, onSelectCommand: 1, onLongPressCommand: 1
+  };
+
   function filterFeed(value, depth) {
     if (!value || typeof value !== 'object' || depth > 40) return;
     if (Array.isArray(value)) {
       for (var i = value.length - 1; i >= 0; i--) {
-        if (hiddenTile(value[i])) value.splice(i, 1);
-        else filterFeed(value[i], depth + 1);
+        var item = value[i];
+        if (!item || typeof item !== 'object') continue;
+        if (item.tileRenderer || item.guideEntryRenderer) {
+          // a tile never holds other tiles, so there is nothing more to look at inside it
+          if (hiddenTile(item)) value.splice(i, 1);
+          else if (item.tileRenderer) setPreviewDelay(item.tileRenderer);
+        } else {
+          filterFeed(item, depth + 1);
+        }
       }
       return;
     }
     for (var key in value) {
-      if (value[key] && typeof value[key] === 'object') filterFeed(value[key], depth + 1);
+      if (NO_TILES[key]) continue;
+      var child = value[key];
+      if (child && typeof child === 'object') filterFeed(child, depth + 1);
     }
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Preview delay: TizenTube starts a preview only after a video has been in focus for 3 seconds.
+  // The wait is written into every tile it receives, and is changed here as the tile arrives.
+  // ---------------------------------------------------------------------------------------------
+
+  var PREVIEW_STEPS = [500, 1000, 2000, 3000];
+  var TIZENTUBE_DELAY = 3000;
+
+  function previewDelay() {
+    var delay = luda.setting('previewDelay');
+    return PREVIEW_STEPS.indexOf(delay) >= 0 ? delay : TIZENTUBE_DELAY;
+  }
+
+  function setPreviewDelay(tile) {
+    var focus = tile.onFocusCommand && tile.onFocusCommand.startInlinePlaybackCommand;
+    if (focus && typeof focus.delayMs === 'number') focus.delayMs = previewDelay();
+  }
+
   function filterResponse(result) {
-    if (!luda.setting('hideMixes') && !luda.setting('hideUpcoming')) return;
+    if (!shortsHidden && !luda.setting('hideMixes') && !luda.setting('hideUpcoming') &&
+        previewDelay() === TIZENTUBE_DELAY) return;
     if (!result || typeof result !== 'object') return;
-    if (result.contents || result.continuationContents || result.onResponseReceivedActions) filterFeed(result, 0);
+    if (result.streamingData || result.playabilityStatus) return; // a video being played, not a list
+    if (result.responseContext || result.contents || result.continuationContents || result.onResponseReceivedActions) {
+      filterFeed(result, 0);
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -432,6 +491,8 @@
       hideUpcomingHint: 'Scheduled streams and premieres are left out of lists',
       speedPerChannel: 'Remember speed for each channel',
       speedPerChannelHint: 'A speed you pick is used again for that channel',
+      previewDelay: 'Preview delay',
+      previewDelayValue: 'Previews start after %s s in focus; applies to lists opened from now on',
       sleepTimer: 'Sleep timer',
       sleepOff: 'Off',
       sleepLeft: '%d min left',
@@ -454,6 +515,8 @@
       hideUpcomingHint: 'Запланированные трансляции и премьеры не показываются в списках',
       speedPerChannel: 'Запоминать скорость для каждого канала',
       speedPerChannelHint: 'Выбранная скорость снова используется для этого канала',
+      previewDelay: 'Задержка тизеров',
+      previewDelayValue: 'Тизер начинается через %s с; действует для новых списков',
       sleepTimer: 'Таймер сна',
       sleepOff: 'Выключен',
       sleepLeft: 'Осталось %d мин',
@@ -507,7 +570,8 @@
     localStorage.setItem(TIZENTUBE, JSON.stringify(current));
     return true;
   }
-  var SLEEP_ROW = OPTIONS.length; // the sleep timer comes after the switches
+  var PREVIEW_ROW = OPTIONS.length; // the preview delay and the sleep timer come after the switches
+  var SLEEP_ROW = OPTIONS.length + 1;
 
   function showMenu(selected, update) {
     function row(title, subtitle, action, parameters, icon) {
@@ -527,6 +591,8 @@
       return row(text(name), text(name + 'Hint'), 'LUDA_TOGGLE', [name],
         checked(name) ? 'CHECK_BOX' : 'CHECK_BOX_OUTLINE_BLANK');
     });
+    items.push(row(text('previewDelay'),
+      text('previewDelayValue').replace('%s', String(previewDelay() / 1000)), 'LUDA_PREVIEW_DELAY', []));
     items.push(row(text('sleepTimer'), sleepLabel(), 'LUDA_SLEEP', []));
     var back = { signalAction: { signal: 'POPUP_BACK' } };
     var popup = {
@@ -571,10 +637,14 @@
     } else if (action.action === 'LUDA_TOGGLE') {
       var name = action.parameters && action.parameters[0];
       if (OPTIONS.indexOf(name) < 0) return;
-      var reload = toggle(name);
+      var needsReload = toggle(name);
       if (name === 'silentPreviews') quietAll();
       showMenu(OPTIONS.indexOf(name), true);
-      if (reload) setTimeout(function () { location.reload(); }, 700);
+      if (needsReload) setTimeout(function () { reload('hide shorts'); }, 700);
+    } else if (action.action === 'LUDA_PREVIEW_DELAY') {
+      var next = PREVIEW_STEPS[(PREVIEW_STEPS.indexOf(previewDelay()) + 1) % PREVIEW_STEPS.length];
+      luda.setting('previewDelay', next);
+      showMenu(PREVIEW_ROW, true);
     } else if (action.action === 'LUDA_SLEEP') {
       setSleep((sleep.step + 1) % SLEEP_STEPS.length);
       showMenu(SLEEP_ROW, true);
@@ -614,7 +684,7 @@
       })(instance, instance.resolveCommand);
     }
   }
-  setInterval(hookCommands, 2000);
+  setInterval(hookCommands, 3000);
   hookCommands();
 
   function addSettingsEntry(page) {
@@ -645,26 +715,172 @@
     page.items.splice(first && first.categoryId === 'tizentube_category' ? 1 : 0, 0, entry);
   }
 
-  // The Settings page arrives as JSON; the entry is added as it is read
-  var parse = JSON.parse;
-  JSON.parse = function () {
-    var result = parse.apply(this, arguments);
-    try { addSettingsEntry(result); } catch (e) { /* never break the app's own parsing */ }
-    try { filterResponse(result); } catch (e) { /* the same */ }
-    return result;
-  };
+  // The Settings page and the lists arrive as JSON; they are changed as they are read.
+  //
+  // TizenTube changes the same results in its own wrapper. The add-on's wrapper must be the outer
+  // one, so it sees TizenTube's changes (such as the preview wait) and has the last word; which
+  // script loads first varies, so the wrapper is put back on the outside whenever it isn't. An
+  // older wrapper of the add-on left further in just passes results through.
+  var activeParse = null;
+
+  function process(text, result) {
+    if (typeof text !== 'string' || text.length < 200) return;
+    // Most of what the app reads needs nothing from here; a quick look at the text, before going
+    // through the result, decides whether it is worth it.
+    try {
+      if (text.indexOf('settingCategoryCollectionRenderer') >= 0) addSettingsEntry(result);
+    } catch (e) { /* never break the app's own parsing */ }
+    try {
+      if ((shortsHidden && text.indexOf('guideEntryRenderer') >= 0) ||
+          (luda.setting('hideMixes') && text.indexOf('"RD') >= 0) ||
+          (luda.setting('hideUpcoming') && text.indexOf('UPCOMING') >= 0) ||
+          (previewDelay() !== TIZENTUBE_DELAY && text.indexOf('tileRenderer') >= 0)) {
+        filterResponse(result);
+      }
+    } catch (e) { /* the same */ }
+  }
+
+  function wrapParse() {
+    if (JSON.parse === activeParse) return;
+    var inner = JSON.parse;
+    var mine = function (text) {
+      var result = inner.apply(this, arguments);
+      if (mine === activeParse) process(text, result);
+      return result;
+    };
+    activeParse = mine;
+    luda.innerParse = inner; // lets the add-on's own cost be measured apart from TizenTube's
+    JSON.parse = mine;
+  }
+  wrapParse();
+  setInterval(wrapParse, 500);
 
   luda.menu = { show: function () { showMenu(0, false); } };
 
   // ---------------------------------------------------------------------------------------------
+  // Reloading without "Who's watching"
+  //
+  // When "Who's watching" is set to always show, TizenTube brings the account picker back on every
+  // page load, so each reload made here would ask again who is watching. Before such a reload the
+  // picker is marked as just shown and TizenTube is told, for that one load only, not to bring it
+  // back; the setting is put back as soon as the page is up again.
+  // ---------------------------------------------------------------------------------------------
 
-  function applyAccount() {
-    var settingsChanged = applySettings();
-    var languageChanged = applyLanguage();
-    if (settingsChanged || languageChanged) location.reload();
+  var PICKER_KEYS = ['startup-screen-account-selector-with-guest', 'whos_watching_fullscreen_zero_accounts',
+    'startup-screen-signed-out-welcome-back'];
+
+  function reload(reason) {
+    trace('reload: ' + reason);
+    try {
+      var live = JSON.parse(localStorage.getItem(TIZENTUBE));
+      if (live && live.permanentlyEnableWhoIsWatchingMenu) {
+        live.permanentlyEnableWhoIsWatchingMenu = false;
+        localStorage.setItem(TIZENTUBE, JSON.stringify(live));
+        sessionStorage.setItem(STORE + 'picker-held', '1');
+      }
+      var actions = JSON.parse(localStorage.getItem('yt.leanback.default::recurring_actions'));
+      PICKER_KEYS.forEach(function (key) {
+        if (actions.data.data[key]) actions.data.data[key].lastFired = Date.now();
+      });
+      localStorage.setItem('yt.leanback.default::recurring_actions', JSON.stringify(actions));
+    } catch (e) { /* reload anyway */ }
+    location.reload();
   }
 
-  accountListeners.push(applyAccount);
-  applyAccount();
+  function releasePicker() {
+    if (!sessionStorage.getItem(STORE + 'picker-held')) return;
+    sessionStorage.removeItem(STORE + 'picker-held');
+    try {
+      var live = JSON.parse(localStorage.getItem(TIZENTUBE));
+      live.permanentlyEnableWhoIsWatchingMenu = true;
+      localStorage.setItem(TIZENTUBE, JSON.stringify(live));
+    } catch (e) { /* nothing to put back */ }
+  }
+  // TizenTube reads its settings as it starts; put the setting back once it has
+  setTimeout(releasePicker, 8000);
+  luda.reload = reload;
+
+  // ---------------------------------------------------------------------------------------------
+  // "Who's watching" on return: TizenTube asks only when the app starts. With its "always" setting
+  // on, the picker is also opened when the app comes back after being left, for example with the
+  // remote's Home button, because to the viewer that is opening the app again.
+  // ---------------------------------------------------------------------------------------------
+
+  var hiddenAt = 0;
+  var AWAY_MS = 2000;
+
+  function pickerAlways() {
+    try {
+      var live = JSON.parse(localStorage.getItem(TIZENTUBE));
+      return Boolean(live && live.enableWhoIsWatchingMenu &&
+        (live.permanentlyEnableWhoIsWatchingMenu || sessionStorage.getItem(STORE + 'picker-held')));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function askWhoIsWatching() {
+    trace('asking who is watching');
+    command({
+      requestAccountSelectorCommand: {
+        identityActionContext: { eventTrigger: 'ACCOUNT_EVENT_TRIGGER_WHOS_WATCHING' }
+      }
+    });
+  }
+
+  function cameBack() {
+    if (!hiddenAt) return;
+    var away = Date.now() - hiddenAt;
+    hiddenAt = 0;
+    trace('back after ' + away + ' ms');
+    if (away >= AWAY_MS && pickerAlways()) askWhoIsWatching();
+  }
+
+  function wentAway() {
+    if (!hiddenAt) hiddenAt = Date.now();
+    trace('away');
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') wentAway(); else cameBack();
+  });
+  luda.whosWatching = { ask: askWhoIsWatching };
+
+  // ---------------------------------------------------------------------------------------------
+  // Account changes
+  //
+  // Picking an account makes the app save it and reload the page by itself. The new account's
+  // language and settings are put in place the moment it is saved, so that reload already shows
+  // them and no second reload is needed. Only if the app doesn't reload does the add-on do it.
+  // ---------------------------------------------------------------------------------------------
+
+  var IDENTITY = 'yt.leanback.default::last-identity-used';
+  var leaving = false;
+  window.addEventListener('beforeunload', function () { leaving = true; });
+  window.addEventListener('pagehide', function () { leaving = true; });
+
+  function applyAccount(reloadIfNeeded) {
+    var settingsChanged = applySettings();
+    var languageChanged = applyLanguage();
+    if (!(settingsChanged || languageChanged) || !reloadIfNeeded) return;
+    if (reloadIfNeeded === 'now') reload('start ' + account());
+    else setTimeout(function () { if (!leaving) reload('account ' + account()); }, 3000);
+  }
+
+  var setItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (key, value) {
+    setItem.apply(this, arguments);
+    if (key !== IDENTITY || this !== localStorage) return;
+    try {
+      var now = account();
+      if (now === shownAccount) return;
+      trace('identity saved ' + shownAccount + ' -> ' + now);
+      shownAccount = now;
+      applyAccount(true);
+    } catch (e) { /* never break the app's own saving */ }
+  };
+
+  accountListeners.push(function () { applyAccount(true); });
+  applyAccount('now');
   quietAll();
 })();

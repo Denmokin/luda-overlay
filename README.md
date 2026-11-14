@@ -13,7 +13,9 @@ A small add-on that runs on top of [TizenTube](https://github.com/reisxd/TizenTu
 | Settings for each account | Each account keeps its own TizenTube settings | Working |
 | Silent previews | Previews play while you browse, turned down until they can't be heard; opening a video restores the sound | Working |
 | Remember speed for each channel | A speed picked while watching is used again for that channel's videos, per account | Working |
-| Hide Shorts | Switches TizenTube's own Shorts setting from the Luda menu, per account; the app reloads to apply it | Working |
+| Who's watching on return | With TizenTube's "Who's watching: always" on, the account picker also opens when the app comes back after being left (Home button, another app), not only at start | Working |
+| Preview delay | TizenTube waits 3 s on a video before its preview starts; the Luda menu sets 0.5, 1 (default), 2 or 3 s | Working |
+| Hide Shorts | Switches TizenTube's own Shorts setting from the Luda menu, per account, and also removes the Shorts entry from the side menu, which TizenTube leaves in place; the app reloads to apply it | Working |
 | Hide mixes | Mix playlists are left out of lists | Working |
 | Hide upcoming streams | Scheduled streams and premieres are left out of lists | Working on a test list; no scheduled stream was available to try |
 | Sleep timer | Pauses playback after 15, 30, 60 or 90 minutes | Working |
